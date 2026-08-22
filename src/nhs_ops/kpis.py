@@ -38,21 +38,16 @@ def provider_monthly_kpis(frame: pd.DataFrame) -> pd.DataFrame:
 def add_peer_anomaly_flags(frame: pd.DataFrame, threshold: float = 3.5) -> pd.DataFrame:
     """Flag unusually high breach rates using a monthly robust z-score (MAD)."""
     result = frame.copy()
-
-    def score_month(group: pd.DataFrame) -> pd.DataFrame:
-        median = group["breach_rate"].median()
-        mad = (group["breach_rate"] - median).abs().median()
-        if pd.isna(mad) or mad == 0:
-            group["breach_rate_robust_z"] = 0.0
-        else:
-            group["breach_rate_robust_z"] = 0.6745 * (group["breach_rate"] - median) / mad
-        return group
-
-    result = result.groupby("month", group_keys=False).apply(score_month, include_groups=False)
-    result = result.reset_index(drop=False)
-    if "month" not in result.columns:
-        # pandas versions differ in how grouping columns are retained when include_groups=False.
-        raise RuntimeError("Month grouping column was not retained during anomaly scoring")
+    monthly_median = result.groupby("month")["breach_rate"].transform("median")
+    monthly_mad = result.groupby("month")["breach_rate"].transform(
+        lambda values: (values - values.median()).abs().median()
+    )
+    numerator = 0.6745 * (result["breach_rate"] - monthly_median)
+    result["breach_rate_robust_z"] = np.where(
+        monthly_mad.fillna(0) > 0,
+        numerator / monthly_mad,
+        0.0,
+    )
     result["high_breach_anomaly"] = result["breach_rate_robust_z"] >= threshold
     return result
 
