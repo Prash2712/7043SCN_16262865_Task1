@@ -1,96 +1,58 @@
-# NHS Operations Intelligence Platform
+# NHS Operations Intelligence
 
-A production-style analytics project for turning NHS England monthly A&E activity data into **provider performance KPIs, data-quality controls, peer anomaly signals and leakage-aware forecasts**.
+I built this around a simple problem: monthly A&E releases contain useful operational signals, but the raw files are not a management view. Before looking at a forecast, I want to know whether the source changed, whether the KPI is calculated consistently, and whether an apparent outlier is actually unusual relative to other providers in the same month.
 
-This repository is intentionally designed as an analytics-engineering system rather than a notebook exercise. The core pipeline is package-based, testable and reproducible; the output grain is suitable for SQL/Power BI consumption.
+The pipeline turns NHS England A&E activity files into a provider-month dataset with four-hour performance measures, demand trends, peer flags and short-horizon forecasts.
 
-## Business questions
+## The data
 
-The project is structured around questions an operational performance team could actually ask:
+The intended source is the NHS England **A&E Attendances and Emergency Admissions** monthly collection. Source files are not copied into this repository; the CLI accepts either a downloaded CSV or a direct CSV URL.
 
-- Which providers are experiencing rising A&E demand?
-- Where is the four-hour performance rate deteriorating month on month?
-- Which providers are unusual relative to peers in the same reporting month?
-- What does the recent trajectory imply for short-horizon activity planning?
-- Can every published KPI be traced back to a specific source snapshot?
+Official releases: https://www.england.nhs.uk/statistics/statistical-work-areas/ae-waiting-times-and-activity/ae-attendances-and-emergency-admissions-2026-27/
 
-## Data source
+Every ingestion records a SHA-256 hash and source metadata. That sounds slightly excessive for a small project, but it makes later questions such as “why did this number change?” much easier to answer when a public dataset is revised.
 
-The target source is the official **NHS England A&E Attendances and Emergency Admissions** monthly collection. NHS England publishes provider-level activity, including attendances and the number discharged, admitted or transferred within four hours. July 2026 was published on 13 August 2026.
-
-Official publication page:
-
-https://www.england.nhs.uk/statistics/statistical-work-areas/ae-waiting-times-and-activity/ae-attendances-and-emergency-admissions-2026-27/
-
-The repository does not redistribute NHS source files. Pass a downloaded CSV or direct CSV URL to the CLI.
-
-## Architecture
+## Flow
 
 ```text
-Official NHS CSV
-      |
-      v
-Ingestion + SHA-256 provenance
-      |
-      v
-Raw parquet snapshot
-      |
-      v
-Schema contract / quality checks
-      |
-      v
-Canonical provider-month model
-      |
-      +----------------------+-------------------+
-      |                      |                   |
-      v                      v                   v
-Operational KPIs       Peer anomaly flags   Forecast features
-      |                                          |
-      +----------------------+-------------------+
-                             v
-                    BI-ready parquet / SQL
+NHS CSV
+  -> raw parquet snapshot + provenance
+  -> column/schema normalisation
+  -> provider-month aggregation
+  -> operational KPIs
+       |-> peer anomaly flags
+       |-> lag-only forecasting features
+  -> parquet / SQL outputs for BI
 ```
 
-See [`docs/architecture.md`](docs/architecture.md) for design decisions and limitations.
+The code lives under `src/nhs_ops/`; notebooks are not part of the execution path.
 
-## Engineering features
+## Measures
 
-- HTTP or local-file ingestion
-- SHA-256 source provenance
-- Raw parquet snapshot materialisation
-- Flexible column-alias resolution into a stable analytical contract
-- Fail-fast required-field checks
-- Four-hour rate and breach calculations
-- Provider/month aggregation
-- Month-on-month demand and breach-rate movement
-- Median-absolute-deviation peer anomaly logic
-- Lag-only forecasting features
-- Chronological hold-out evaluation
-- Recursive multi-month forecasts
-- CLI entrypoint
-- BI-oriented SQL model
-- Unit tests and GitHub Actions CI
+The current provider-month model calculates:
 
-## Project layout
+- total attendances
+- admitted/emergency activity where available
+- number and rate within four hours
+- four-hour breaches
+- month-on-month movement
+- peer-relative anomaly flags using median absolute deviation
 
-```text
-.
-├── src/nhs_ops/
-│   ├── ingest.py
-│   ├── transform.py
-│   ├── kpis.py
-│   ├── forecast.py
-│   └── cli.py
-├── sql/
-│   └── provider_monthly_kpis.sql
-├── tests/
-├── sample_data/
-├── docs/
-├── .github/workflows/ci.yml
-└── pyproject.toml
+The anomaly flag is deliberately an investigation signal, not a league table. A provider can look unusual for reasons that have nothing to do with poor performance: reporting differences, service mix, local demand shocks or a genuine operational change.
+
+## Forecasting
+
+Forecasting is kept separate from descriptive reporting. A provider needs at least 18 monthly observations before the function will run.
+
+```bash
+nhs-ops forecast R01 --metric attendances --horizon 3
 ```
 
-## Run locally
+The model uses lagged history and rolling features. Evaluation holds out the most recent observations chronologically and reports MAE before the model is refit for the forward forecast. Future target values are never used as features.
+
+I would not use the resulting forecast for staffing decisions without a longer backtest and local context. It is here to show the forecasting workflow and its boundaries, not to imply that national public data is enough for operational deployment.
+
+## Run it
 
 ```bash
 python -m venv .venv
@@ -100,9 +62,7 @@ pip install -e '.[dev]'
 nhs-ops build sample_data/ae_sample.csv
 ```
 
-The synthetic sample is only a contract fixture. For real analysis, replace it with an official NHS England monthly CSV.
-
-Generated outputs:
+The sample file is synthetic and only exercises the data contract. With a real NHS release, the same command writes:
 
 ```text
 data/processed/raw_snapshot.parquet
@@ -111,51 +71,30 @@ data/processed/provenance.json
 data/processed/executive_snapshot.json
 ```
 
-## Forecasting
+The SQL model in `sql/provider_monthly_kpis.sql` uses the same provider/month grain and is intended to be the hand-off point for Power BI or another BI tool.
 
-Forecasting is deliberately separated from descriptive performance reporting. A provider requires at least 18 monthly observations before the modelling function will run.
-
-```bash
-nhs-ops forecast R01 --metric attendances --horizon 3
-```
-
-The model uses lagged activity and rolling-history features, holds out the most recent observations for evaluation, reports **MAE**, then refits before recursively forecasting future months. Future target values are never used as input features.
-
-## Power BI / analytics layer
-
-`sql/provider_monthly_kpis.sql` defines the intended BI grain and measures. A Power BI implementation can sit directly on the provider/month output with pages for:
-
-- executive overview
-- provider benchmarking
-- four-hour performance
-- demand trends
-- breach analysis
-- anomaly investigation
-- forecast and capacity planning
-- data-quality/provenance checks
-
-## What is not claimed
-
-This project does **not** claim that statistical anomalies establish poor clinical performance, nor that a forecast is suitable for operational deployment without longer history, backtesting and local validation. The purpose of the anomaly layer is prioritisation for investigation.
-
-## Quality controls
+## Checks
 
 ```bash
 ruff check src tests
 pytest -q
 ```
 
-CI runs both checks on pushes and pull requests.
+CI runs both on pushes and pull requests.
 
-## Suggested repository name
+## Things I would add next
 
-The current GitHub shell contains an old university-style name. For a recruiter-facing portfolio, rename it to:
+The most useful extension is not a more complex forecaster. I would first bring in RTT waiting-list data, define a small cross-domain set of pressure measures and test whether provider-level movement is stable after accounting for reporting/revision effects. I would also keep the newest reporting periods visibly marked when source completeness is uncertain.
 
-`nhs-operations-intelligence-platform`
+## Repository map
 
-The original coursework state is preserved on the `archive/original-coursework` branch.
+```text
+src/nhs_ops/       ingestion, transforms, KPIs and forecasting
+sql/               BI-oriented model
+sample_data/       synthetic contract fixture
+tests/             unit tests
+docs/              architecture notes
+.github/workflows/ CI
+```
 
-## Author
-
-**Prasanth Balisetty**  
-Data Science · Analytics Engineering · Machine Learning
+**Prasanth Balisetty**
