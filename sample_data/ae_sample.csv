@@ -1,0 +1,9 @@
+provider_code,provider_name,month,attendances,within_4h,emergency_admissions
+R01,North Example Trust,2026-04-01,12000,9300,3200
+R01,North Example Trust,2026-05-01,12400,9450,3350
+R01,North Example Trust,2026-06-01,12900,9600,3420
+R01,North Example Trust,2026-07-01,13250,9720,3510
+R02,South Example Trust,2026-04-01,9800,8050,2710
+R02,South Example Trust,2026-05-01,10100,8170,2790
+R02,South Example Trust,2026-06-01,10350,8210,2850
+R02,South Example Trust,2026-07-01,10700,8290,2920
