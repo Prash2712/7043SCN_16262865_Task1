@@ -15,8 +15,8 @@ app = typer.Typer(help="NHS operational intelligence pipeline")
 
 @app.command()
 def build(
-    source: str = typer.Argument(..., help="Local CSV path or HTTPS CSV URL"),
-    output_dir: Path = typer.Option(Path("data/processed")),
+    source: str,
+    output_dir: Path = Path("data/processed"),
 ) -> None:
     """Ingest, validate, transform and materialise provider-level KPI data."""
     raw, provenance = read_csv_source(source)
